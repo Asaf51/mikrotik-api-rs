@@ -10,7 +10,7 @@ use rand::distributions::{Distribution, Uniform};
 use serde::de::DeserializeOwned;
 use tokio::{
     io::{AsyncWriteExt, BufWriter},
-    net::{tcp::OwnedWriteHalf, TcpStream},
+    net::{tcp::OwnedWriteHalf, TcpStream}, task::JoinHandle,
 };
 
 use crate::api::call::{ArrayListCall, EmptyCall};
@@ -46,6 +46,7 @@ pub type SharedTagMap = Arc<Mutex<TagMap>>;
 
 /// Struct to interact with Mikrotik RouterOS API on port 8728
 pub struct MikrotikAPI<S: State> {
+    task: JoinHandle<()>,
     output: BufWriter<OwnedWriteHalf>,
     tag_map: SharedTagMap,
     tag_iter: Box<dyn Iterator<Item = u16>>,
@@ -148,9 +149,10 @@ impl MikrotikAPI<Disconnected> {
 
         let map_clone = shared_map.clone();
 
-        tokio::task::spawn(event_loop(sock_read, map_clone));
+        let task = tokio::task::spawn(event_loop(sock_read, map_clone));
 
         Self {
+            task,
             tag_iter,
             output,
             tag_map: shared_map,
@@ -176,6 +178,7 @@ impl MikrotikAPI<Disconnected> {
         use Response::*;
         match success.await {
             Done | Reply(_) => Ok(MikrotikAPI {
+                task: self.task,
                 output: self.output,
                 tag_map: self.tag_map,
                 tag_iter: self.tag_iter,
@@ -289,6 +292,11 @@ impl MikrotikAPI<Authenticated> {
         )
         .await
         .await
+    }
+
+    /// Close the task
+    pub async fn close(&self) {
+        self.task.abort();
     }
 }
 
